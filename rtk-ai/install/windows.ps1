@@ -38,11 +38,10 @@ try {
 
     # 5. Initializing RTK (Added)
     Write-Host "`n--- Initializing RTK ---" -ForegroundColor Cyan
-    # ใช้ & เพื่อรัน exe จากตัวแปร path หรือระบุ full path เพื่อความชัวร์ใน session แรก
     $exe = "$destDir\rtk.exe"
     & $exe --version
-    & $exe init -g
-    & $exe ls | Out-Null 2>&1  # Silence output เหมือน > /dev/null
+    @("y", "y") | & $exe init -g
+    & $exe ls . | Out-Null 2>&1
     & $exe gain
 
     # 6. Cleanup
