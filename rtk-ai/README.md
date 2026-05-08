@@ -7,7 +7,7 @@
 เปิด PowerShell แล้วรันคำสั่งนี้:
 
 ```powershell
-iex (iwr -useb "https://github.com/Ekkapap/the-matrix/blob/main/rtk-ai/install/windows.ps1")
+iex (iwr -useb "https://raw.githubusercontent.com/Ekkapap/the-matrix/refs/heads/main/rtk-ai/install/windows.ps1")
 
 ```
 
@@ -18,7 +18,7 @@ iex (iwr -useb "https://github.com/Ekkapap/the-matrix/blob/main/rtk-ai/install/w
 เปิด Terminal แล้วรันคำสั่งนี้:
 
 ```bash
-curl -fsSL https://github.com/Ekkapap/the-matrix/blob/main/rtk-ai/install/unix.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Ekkapap/the-matrix/refs/heads/main/rtk-ai/install/unix.sh | bash
 
 ```
 
