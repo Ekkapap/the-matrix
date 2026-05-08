@@ -7,7 +7,7 @@
 เปิด PowerShell แล้วรันคำสั่งนี้:
 
 ```powershell
-iex (iwr -useb "https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/rtk-windows.ps1")
+iex (iwr -useb "https://github.com/Ekkapap/the-matrix/blob/main/rtk-ai/install/windows.ps1")
 
 ```
 
@@ -18,7 +18,7 @@ iex (iwr -useb "https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/rtk-w
 เปิด Terminal แล้วรันคำสั่งนี้:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/rtk-unix.sh | bash
+curl -fsSL https://github.com/Ekkapap/the-matrix/blob/main/rtk-ai/install/unix.sh | bash
 
 ```
 
@@ -28,18 +28,16 @@ curl -fsSL https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/rtk-unix.s
 
 ## 🚀 Quick Start
 
-หลังจากติดตั้งเสร็จสิ้น ให้เปิด Terminal ใหม่แล้วเริ่มใช้งานได้ทันที:
+หลังจากติดตั้งเสร็จสิ้น ให้เปิด Terminal แล้วเข้าไปที่โฟลเดอร์โปรเจ็คของคุณ จากนั้นเลือกคำสั่ง Initialize ให้ตรงกับ AI ที่คุณใช้:
 
 ```bash
-# 1. Initialize สำหรับ AI Tool ที่คุณใช้งาน
-rtk init -g                # Claude Code / Copilot (default)
-rtk init -g --gemini       # Gemini CLI
-rtk init --agent cursor    # Cursor
-rtk init --agent windsurf  # Windsurf
+rtk init -g                  # Claude Code / Copilot (default)
+rtk init -g --gemini         # Gemini CLI
+rtk init --agent cursor      # Cursor
+rtk init --agent windsurf    # Windsurf
 rtk init --agent antigravity # Google Antigravity
 
-# 2. ทดสอบการทำงาน
-rtk --version
+rtk --version # ตรวจสอบเวอร์ชั่น
 rtk gain    # ตรวจสอบสถิติการประหยัด Token
 
 ```
@@ -65,5 +63,3 @@ RTK ทำหน้าที่เป็น Proxy ขั้นกลางระ
 4. **Deduplication**: ลดการซ้ำซ้อนของ Log
 
 ---
-
-**หมายเหตุ:** โปรดเปลี่ยน `YOUR_USER/YOUR_REPO` ในส่วนการติดตั้งให้เป็นลิงก์จริงที่คุณอัปโหลดสคริปต์ไว้บน GitHub ก่อนใช้งานครับ
