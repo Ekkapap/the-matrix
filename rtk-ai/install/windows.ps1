@@ -44,3 +44,6 @@ try {
 } catch {
     Write-Host "[!] Error: $($_.Exception.Message)" -ForegroundColor Red
 }
+
+Write-Host "--- RTK installed and is ready to use ---" -ForegroundColor Green
+Start-Process "https://github.com/rtk-ai"
