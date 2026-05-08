@@ -40,5 +40,5 @@ rtk gain
 echo "--- RTK installed and is ready to use ---"
 if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "[+] Opening RTK GitHub."
-    open "https://github.com/rtk-ai"
+    open "https://github.com/rtk-ai/rtk"
 fi
