@@ -46,4 +46,4 @@ try {
 }
 
 Write-Host "--- RTK installed and is ready to use ---" -ForegroundColor Green
-Start-Process "https://github.com/rtk-ai"
+Start-Process "https://github.com/rtk-ai/rtk"
