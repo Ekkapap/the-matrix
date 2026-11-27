@@ -17,10 +17,6 @@ function Get-CommandText([string]$Name, [string[]]$Arguments) {
     return (& $Name @Arguments 2>&1 | Out-String)
 }
 
-function Write-Utf8NoBom([string]$Path, [string]$Content) {
-    [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
-}
-
 function Backup-Once([string]$Path) {
     if ((Test-Path -LiteralPath $Path) -and -not (Test-Path -LiteralPath "$Path.bak")) {
         Copy-Item -LiteralPath $Path -Destination "$Path.bak"
@@ -28,7 +24,7 @@ function Backup-Once([string]$Path) {
     }
 }
 
-Write-Step "ตรวจสอบ Node.js และ npx"
+Write-Step "Checking Node.js and npx"
 $node = Get-Command node -ErrorAction SilentlyContinue
 $npx = Get-Command npx -ErrorAction SilentlyContinue
 $needsNode = ($null -eq $node -or $null -eq $npx)
@@ -46,9 +42,9 @@ if (-not $needsNode) {
 }
 
 if ($needsNode) {
-    $answer = Read-Host "ต้องการติดตั้ง Node.js LTS ผ่าน winget หรือไม่? (y/n)"
-    if ($answer -notmatch '^(y|yes)$') { throw "ยกเลิก เนื่องจาก Node.js/npx ไม่พร้อม" }
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "ไม่พบ winget กรุณาติดตั้ง Node.js LTS ก่อน" }
+    $answer = Read-Host "Install Node.js LTS with winget? (y/n)"
+    if ($answer -notmatch '^(y|yes)$') { throw "Cancelled: Node.js/npx is not available" }
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "winget not found. Install Node.js LTS first" }
     Invoke-Checked "winget" @("install", "--id", "OpenJS.NodeJS.LTS", "--exact", "--accept-package-agreements", "--accept-source-agreements")
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -56,13 +52,14 @@ if ($needsNode) {
 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npx -ErrorAction SilentlyContinue)) {
-    throw "ไม่พบ Node.js/npx หลังตรวจสอบ กรุณาเปิด PowerShell ใหม่แล้วรันอีกครั้ง"
+    throw "Node.js/npx not found. Open a new PowerShell window and run this installer again"
 }
 $versionText = (& node --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') { throw "อ่าน Node.js version ไม่ได้" }
+if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') { throw "Cannot read the Node.js version" }
 $major = [int]$Matches[1]
 $minor = [int]$Matches[2]
-if ($major -lt 18 -or ($major -eq 18 -and $minor -lt 17)) { throw "ต้องใช้ Node.js 18.17 หรือใหม่กว่า" }
+if ($major -lt 18 -or ($major -eq 18 -and $minor -lt 17)) { throw "Node.js 18.17 or newer is required" }
+Write-Host "Node.js $versionText"
 
 $marketplaceRepo = "giancarloerra/socraticode"
 $marketplaceName = "socraticode"
@@ -82,36 +79,35 @@ $remoteSettings = [ordered]@{
 $env:SOCRATICODE_REMOTE_SETTINGS = ($remoteSettings | ConvertTo-Json -Compress)
 
 $claudeSettingsPath = Join-Path $HOME ".claude\settings.json"
-$codexConfigPath = Join-Path $HOME ".codex\config.toml"
-$updated = 0
 
-Write-Step "ติดตั้ง Claude Code Plugin"
-if (Get-Command claude -ErrorAction SilentlyContinue) {
-    $marketplaces = Get-CommandText "claude" @("plugin", "marketplace", "list")
-    if ($marketplaces -match "(?m)(^|\s)$([regex]::Escape($marketplaceName))\s*$") {
-        Invoke-Checked "claude" @("plugin", "marketplace", "update", $marketplaceName)
-    }
-    else {
-        Invoke-Checked "claude" @("plugin", "marketplace", "add", $marketplaceRepo)
-    }
+Write-Step "Installing the SocratiCode plugin for Claude Code"
+if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { throw "Claude Code CLI not found. Install Claude Code first" }
 
-    $plugins = Get-CommandText "claude" @("plugin", "list")
-    if ($plugins -match [regex]::Escape($pluginId)) {
-        try {
-            Invoke-Checked "claude" @("plugin", "update", "--scope", "user", $pluginId)
-        }
-        catch {
-            Write-Host "อัปเดต Plugin ไม่สำเร็จ ใช้เวอร์ชันที่ติดตั้งอยู่ต่อ: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-    else {
-        Invoke-Checked "claude" @("plugin", "install", "--scope", "user", $pluginId)
-    }
+$marketplaces = Get-CommandText "claude" @("plugin", "marketplace", "list")
+if ($marketplaces -match "(?m)(^|\s)$([regex]::Escape($marketplaceName))\s*$") {
+    Invoke-Checked "claude" @("plugin", "marketplace", "update", $marketplaceName)
+}
+else {
+    Invoke-Checked "claude" @("plugin", "marketplace", "add", $marketplaceRepo)
+}
 
-    Write-Step "กำหนดค่า Remote Ollama/Qdrant ให้ Claude Code"
-    New-Item -ItemType Directory -Force -Path (Split-Path $claudeSettingsPath) | Out-Null
-    Backup-Once $claudeSettingsPath
-    $mergeSettings = @'
+$plugins = Get-CommandText "claude" @("plugin", "list")
+if ($plugins -match [regex]::Escape($pluginId)) {
+    try {
+        Invoke-Checked "claude" @("plugin", "update", "--scope", "user", $pluginId)
+    }
+    catch {
+        Write-Host "Plugin update failed, keeping the installed version: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+else {
+    Invoke-Checked "claude" @("plugin", "install", "--scope", "user", $pluginId)
+}
+
+Write-Step "Writing the remote Ollama/Qdrant settings for Claude Code"
+New-Item -ItemType Directory -Force -Path (Split-Path $claudeSettingsPath) | Out-Null
+Backup-Once $claudeSettingsPath
+$mergeSettings = @'
 const fs = require("node:fs");
 const file = process.argv[2];
 const raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "") : "";
@@ -122,74 +118,19 @@ if (!config.env || typeof config.env !== "object" || Array.isArray(config.env)) 
 Object.assign(config.env, JSON.parse(process.env.SOCRATICODE_REMOTE_SETTINGS));
 fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
 '@
-    $mergeSettings | & node - $claudeSettingsPath
-    $mergeCode = $LASTEXITCODE
-    if ($mergeCode -ne 0) { throw "แก้ไข $claudeSettingsPath ไม่สำเร็จ (ไฟล์เดิมไม่ถูกเปลี่ยน)" }
-    Write-Host "อัปเดต: $claudeSettingsPath"
-    $updated++
-}
-else {
-    Write-Host "ไม่พบ Claude Code CLI ข้ามรายการนี้" -ForegroundColor Yellow
-}
+$mergeSettings | & node - $claudeSettingsPath
+if ($LASTEXITCODE -ne 0) { throw "Cannot update $claudeSettingsPath (the file was left unchanged)" }
+Write-Host "Updated: $claudeSettingsPath"
 
-Write-Step "อัปเดต Codex Plugin"
-if (Get-Command codex -ErrorAction SilentlyContinue) {
-    Invoke-Checked "codex" @("plugin", "marketplace", "upgrade", "socraticode")
-    Invoke-Checked "codex" @("plugin", "add", "socraticode@socraticode")
-    New-Item -ItemType Directory -Force -Path (Split-Path $codexConfigPath) | Out-Null
-    if (-not (Test-Path -LiteralPath $codexConfigPath)) { Write-Utf8NoBom $codexConfigPath "" }
-    $toml = Get-Content -LiteralPath $codexConfigPath -Raw
-    function Set-TomlValue([string]$Content, [string]$Section, [string]$Key, [string]$Value) {
-        $lines = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in ($Content -split "`r?`n")) { $lines.Add($line) }
-        $header = "[$Section]"
-        $start = -1
-        $end = $lines.Count
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i].Trim() -eq $header) { $start = $i; break }
-        }
-        if ($start -lt 0) {
-            if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].Trim() -ne "") { $lines.Add("") }
-            $lines.Add($header)
-            $lines.Add("$Key = $Value")
-            return ($lines -join "`n") + "`n"
-        }
-        for ($i = $start + 1; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^\s*\[') { $end = $i; break }
-        }
-        $pattern = '^\s*' + [regex]::Escape($Key) + '\s*='
-        for ($i = $start + 1; $i -lt $end; $i++) {
-            if ($lines[$i] -match $pattern) {
-                $lines[$i] = "$Key = $Value"
-                return ($lines -join "`n") + "`n"
-            }
-        }
-        $lines.Insert($end, "$Key = $Value")
-        return ($lines -join "`n") + "`n"
-    }
-    $toml = Set-TomlValue $toml 'plugins."socraticode@socraticode".mcp_servers.socraticode' "enabled" "false"
-    $toml = Set-TomlValue $toml "mcp_servers.socraticode" "command" '"npx"'
-    $toml = Set-TomlValue $toml "mcp_servers.socraticode" "args" '["-y", "--prefer-online", "socraticode@latest"]'
-    foreach ($key in $remoteSettings.Keys) {
-        $toml = Set-TomlValue $toml "mcp_servers.socraticode.env" $key ('"' + $remoteSettings[$key] + '"')
-    }
-    Backup-Once $codexConfigPath
-    Write-Utf8NoBom $codexConfigPath $toml
-    $updated++
-}
-else {
-    Write-Host "ไม่พบ Codex CLI ข้ามรายการนี้" -ForegroundColor Yellow
-}
-
-if ($updated -eq 0) { throw "ไม่พบ Claude Code CLI หรือ Codex CLI" }
-
-Write-Step "ทดสอบการเชื่อมต่อ Ollama และ Qdrant"
+Write-Step "Testing the connection to Ollama and Qdrant"
 $probe = @'
+const crypto = require("node:crypto");
 const settings = JSON.parse(process.env.SOCRATICODE_REMOTE_SETTINGS);
 const base = (url) => url.replace(/\/+$/, "");
 const clean = (value) => String(value).replace(/[^\x20-\x7E]/g, "?").slice(0, 200);
 const report = (name, ok, detail) => console.log(JSON.stringify({ name, ok, detail: clean(detail) }));
 const reason = (error) => (error && error.cause && (error.cause.code || error.cause.message)) || (error && error.message) || String(error);
+const json = (method, body) => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 async function call(url, options, timeoutMs) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
@@ -202,6 +143,7 @@ async function call(url, options, timeoutMs) {
   const qdrant = base(settings.QDRANT_URL);
   const model = settings.EMBEDDING_MODEL;
   const dimensions = Number(settings.EMBEDDING_DIMENSIONS);
+  let vector = null;
 
   try {
     const info = await call(ollama + "/api/version", {}, 10000);
@@ -220,13 +162,10 @@ async function call(url, options, timeoutMs) {
 
   try {
     const started = Date.now();
-    const result = await call(ollama + "/api/embed", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, input: "socraticode connection test" }),
-    }, 120000);
+    const result = await call(ollama + "/api/embed", json("POST", { model, input: "socraticode connection test" }), 120000);
     const size = result.embeddings && result.embeddings[0] ? result.embeddings[0].length : 0;
     const ok = size === dimensions;
+    if (ok) vector = result.embeddings[0];
     report("Embedding test", ok, size + " dimensions in " + (Date.now() - started) + " ms" + (ok ? "" : " (expected " + dimensions + ")"));
   } catch (error) {
     report("Embedding test", false, reason(error));
@@ -239,6 +178,33 @@ async function call(url, options, timeoutMs) {
   } catch (error) {
     report("Qdrant", false, qdrant + " - " + reason(error));
   }
+
+  const collection = "socraticode_install_test_" + crypto.randomBytes(6).toString("hex");
+  const target = qdrant + "/collections/" + collection;
+  const source = vector ? "the test embedding" : "a generated vector";
+  let created = false;
+  let outcome = null;
+  try {
+    const started = Date.now();
+    const point = vector || Array.from({ length: dimensions }, (_, index) => (index % 7) + 1);
+    await call(target, json("PUT", { vectors: { size: dimensions, distance: "Cosine" } }), 30000);
+    created = true;
+    await call(target + "/points?wait=true", json("PUT", { points: [{ id: 1, vector: point, payload: { source: "installer" } }] }), 30000);
+    const found = await call(target + "/points/query", json("POST", { query: point, limit: 1 }), 30000);
+    const hit = found.result && found.result.points ? found.result.points[0] : null;
+    if (!hit || hit.id !== 1) throw new Error("the stored point was not returned by the search");
+    outcome = { ok: true, detail: "create, write and search with " + source + " in " + (Date.now() - started) + " ms" };
+  } catch (error) {
+    outcome = { ok: false, detail: reason(error) };
+  }
+  if (created) {
+    try {
+      await call(target, { method: "DELETE" }, 30000);
+    } catch (error) {
+      outcome = { ok: false, detail: "cannot delete the test collection " + collection + " - " + reason(error) };
+    }
+  }
+  report("Qdrant test", outcome.ok, outcome.detail);
 })();
 '@
 $probeLines = @($probe | & node -)
@@ -258,14 +224,14 @@ foreach ($line in $probeLines) {
     }
 }
 
-Write-Step "ติดตั้งเสร็จ"
+Write-Step "Done"
 if ($checked -eq 0) {
-    Write-Host "ทดสอบการเชื่อมต่อไม่ได้ (node ไม่ส่งผลกลับมา)" -ForegroundColor Yellow
+    Write-Host "Status: the connection test did not run (node returned nothing)" -ForegroundColor Yellow
 }
 elseif ($failed -gt 0) {
-    Write-Host "เชื่อมต่อไม่ผ่าน $failed จาก $checked รายการ ตรวจว่าเชื่อม Headscale VPN แล้ว และ resolve ชื่อผ่าน MagicDNS ได้ แล้วรัน Installer ซ้ำ" -ForegroundColor Yellow
+    Write-Host "Status: $failed of $checked checks failed. Connect to the Headscale VPN, make sure MagicDNS resolves both names, then run this installer again" -ForegroundColor Yellow
 }
 else {
-    Write-Host "เชื่อมต่อ Ollama และ Qdrant ได้ครบ $checked รายการ พร้อมใช้งาน" -ForegroundColor Green
+    Write-Host "Status: all $checked checks passed. Ollama and Qdrant are ready" -ForegroundColor Green
 }
-Write-Host "ปิดและเปิด Claude Code / Codex ใหม่เพื่อโหลด Plugin และ MCP เวอร์ชันใหม่"
+Write-Host "Restart Claude Code to load the plugin and the new settings"
