@@ -8,7 +8,6 @@
 
 ```powershell
 iex (iwr -useb "https://raw.githubusercontent.com/Ekkapap/the-matrix/refs/heads/main/rtk-ai/install/windows.ps1")
-
 ```
 
 *(ติดตั้งไปยัง `%USERPROFILE%\.local\bin` และเปิดเบราว์เซอร์ไปยัง GitHub เมื่อเสร็จสิ้น)*
