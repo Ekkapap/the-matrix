@@ -4,29 +4,15 @@ function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
 }
 
-function Require-Command([string]$Name) {
-    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        throw "ไม่พบคำสั่ง $Name กรุณาติดตั้งและเพิ่มลง PATH ก่อน"
-    }
-}
-
-function Invoke-Checked([string]$Name, [string[]]$Arguments, [switch]$AllowExisting) {
+function Invoke-Checked([string]$Name, [string[]]$Arguments) {
     $output = & $Name @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
-    if ($output) {
-        $output | ForEach-Object { Write-Host $_ }
-    }
-    if ($exitCode -ne 0) {
-        $message = ($output | Out-String)
-        if ($AllowExisting -and $message -match '(?i)already exists|already added|already installed|already registered|duplicate') {
-            return
-        }
-        throw "$Name $($Arguments -join ' ') failed with exit code $exitCode"
-    }
+    $code = $LASTEXITCODE
+    if ($output) { $output | ForEach-Object { Write-Host $_ } }
+    if ($code -ne 0) { throw "$Name $($Arguments -join ' ') failed with exit code $code" }
 }
 
 function Write-Utf8NoBom([string]$Path, [string]$Content) {
-    [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
 function Backup-Once([string]$Path) {
@@ -36,291 +22,106 @@ function Backup-Once([string]$Path) {
     }
 }
 
-function Set-JsonProperty($Object, [string]$Name, $Value) {
-    $property = $Object.PSObject.Properties[$Name]
-    if ($null -eq $property) {
-        $Object | Add-Member -MemberType NoteProperty -Name $Name -Value $Value
+Write-Step "ตรวจสอบ Node.js และ npx"
+$node = Get-Command node -ErrorAction SilentlyContinue
+$npx = Get-Command npx -ErrorAction SilentlyContinue
+$needsNode = ($null -eq $node -or $null -eq $npx)
+
+if (-not $needsNode) {
+    $versionText = (& node --version 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') {
+        $needsNode = $true
     }
     else {
-        $Object.$Name = $Value
+        $major = [int]$Matches[1]
+        $minor = [int]$Matches[2]
+        if ($major -lt 18 -or ($major -eq 18 -and $minor -lt 17)) { $needsNode = $true }
     }
 }
 
-function Set-TomlValue([string]$Content, [string]$Section, [string]$Key, [string]$Value) {
-    $newline = "`r`n"
-    $lines = [System.Collections.Generic.List[string]]::new()
-    foreach ($line in ($Content -split "`r?`n")) {
-        $lines.Add($line)
-    }
-
-    $header = "[$Section]"
-    $start = -1
-    $end = $lines.Count
-
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i].Trim() -eq $header) {
-            $start = $i
-            break
-        }
-    }
-
-    if ($start -lt 0) {
-        if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].Trim() -ne "") {
-            $lines.Add("")
-        }
-        $lines.Add($header)
-        $lines.Add("$Key = $Value")
-        return ($lines -join $newline) + $newline
-    }
-
-    for ($i = $start + 1; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match '^\s*\[') {
-            $end = $i
-            break
-        }
-    }
-
-    $keyPattern = '^\s*' + [regex]::Escape($Key) + '\s*='
-    for ($i = $start + 1; $i -lt $end; $i++) {
-        if ($lines[$i] -match $keyPattern) {
-            $lines[$i] = "$Key = $Value"
-            return ($lines -join $newline) + $newline
-        }
-    }
-
-    $lines.Insert($end, "$Key = $Value")
-    return ($lines -join $newline) + $newline
-}
-
-Write-Step "ตรวจสอบ Node.js และ npx"
-
-function Refresh-ProcessPath {
+if ($needsNode) {
+    $answer = Read-Host "ต้องการติดตั้ง Node.js LTS ผ่าน winget หรือไม่? (y/n)"
+    if ($answer -notmatch '^(y|yes)$') { throw "ยกเลิก เนื่องจาก Node.js/npx ไม่พร้อม" }
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "ไม่พบ winget กรุณาติดตั้ง Node.js LTS ก่อน" }
+    Invoke-Checked "winget" @("install", "--id", "OpenJS.NodeJS.LTS", "--exact", "--accept-package-agreements", "--accept-source-agreements")
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machinePath;$userPath"
 }
 
-function Add-UserPathEntry([string]$Directory) {
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $entries = @($userPath -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $exists = $false
-
-    foreach ($entry in $entries) {
-        $expanded = [Environment]::ExpandEnvironmentVariables($entry).TrimEnd("\")
-        if ($expanded -ieq $Directory.TrimEnd("\")) {
-            $exists = $true
-            break
-        }
-    }
-
-    if (-not $exists) {
-        $newPath = (@($entries) + $Directory) -join ";"
-        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-        Write-Host "เพิ่ม PATH ระดับ User: $Directory" -ForegroundColor Green
-    }
-
-    Refresh-ProcessPath
-    if (($env:Path -split ";" | Where-Object {
-        [Environment]::ExpandEnvironmentVariables($_).TrimEnd("\") -ieq $Directory.TrimEnd("\")
-    }).Count -eq 0) {
-        $env:Path = "$Directory;$env:Path"
-    }
+if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npx -ErrorAction SilentlyContinue)) {
+    throw "ไม่พบ Node.js/npx หลังตรวจสอบ กรุณาเปิด PowerShell ใหม่แล้วรันอีกครั้ง"
 }
+$versionText = (& node --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') { throw "อ่าน Node.js version ไม่ได้" }
+$major = [int]$Matches[1]
+$minor = [int]$Matches[2]
+if ($major -lt 18 -or ($major -eq 18 -and $minor -lt 17)) { throw "ต้องใช้ Node.js 18.17 หรือใหม่กว่า" }
 
-Refresh-ProcessPath
-$nodeCommand = Get-Command "node" -ErrorAction SilentlyContinue
-$npxCommand = Get-Command "npx" -ErrorAction SilentlyContinue
-$needsNodeInstall = ($null -eq $nodeCommand -or $null -eq $npxCommand)
+$codexConfigPath = Join-Path $HOME ".codex\config.toml"
+$updated = 0
 
-if (-not $needsNodeInstall) {
-    $nodeVersionOutput = & node --version 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $needsNodeInstall = $true
-    }
-    else {
-        $nodeVersionText = ($nodeVersionOutput | Out-String).Trim()
-        if ($nodeVersionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') {
-            throw "ไม่สามารถอ่าน Node.js version ได้: $nodeVersionText"
+Write-Step "อัปเดต Codex Plugin"
+if (Get-Command codex -ErrorAction SilentlyContinue) {
+    Invoke-Checked "codex" @("plugin", "marketplace", "upgrade", "socraticode")
+    Invoke-Checked "codex" @("plugin", "add", "socraticode@socraticode")
+    New-Item -ItemType Directory -Force -Path (Split-Path $codexConfigPath) | Out-Null
+    if (-not (Test-Path -LiteralPath $codexConfigPath)) { Write-Utf8NoBom $codexConfigPath "" }
+    $toml = Get-Content -LiteralPath $codexConfigPath -Raw
+    function Set-TomlValue([string]$Content, [string]$Section, [string]$Key, [string]$Value) {
+        $lines = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in ($Content -split "`r?`n")) { $lines.Add($line) }
+        $header = "[$Section]"
+        $start = -1
+        $end = $lines.Count
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i].Trim() -eq $header) { $start = $i; break }
         }
-        $nodeMajor = [int]$Matches[1]
-        $nodeMinor = [int]$Matches[2]
-        if ($nodeMajor -lt 18 -or ($nodeMajor -eq 18 -and $nodeMinor -lt 17)) {
-            Write-Host "Node.js $nodeVersionText ต่ำกว่าเวอร์ชันขั้นต่ำ 18.17" -ForegroundColor Yellow
-            $needsNodeInstall = $true
+        if ($start -lt 0) {
+            if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].Trim() -ne "") { $lines.Add("") }
+            $lines.Add($header)
+            $lines.Add("$Key = $Value")
+            return ($lines -join "`n") + "`n"
         }
-    }
-
-    if (-not $needsNodeInstall) {
-        $npxVersionOutput = & npx --version 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "พบ npx แต่เรียกใช้งานไม่ได้" -ForegroundColor Yellow
-            $needsNodeInstall = $true
+        for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\s*\[') { $end = $i; break }
         }
-    }
-}
-
-if ($needsNodeInstall) {
-    $answer = Read-Host "ต้องการติดตั้ง Node.js LTS พร้อม npm/npx ผ่าน winget หรือไม่? (y/n)"
-    if ($answer -notmatch '^(y|yes)$') {
-        throw "ยกเลิกการติดตั้ง เนื่องจาก Node.js/npx ยังไม่พร้อมใช้งาน"
-    }
-
-    if (-not (Get-Command "winget" -ErrorAction SilentlyContinue)) {
-        throw "ไม่พบ winget กรุณาติดตั้ง Node.js LTS จาก https://nodejs.org/ แล้วรัน Script อีกครั้ง"
-    }
-
-    Invoke-Checked "winget" @(
-        "install",
-        "--id", "OpenJS.NodeJS.LTS",
-        "--exact",
-        "--accept-package-agreements",
-        "--accept-source-agreements"
-    )
-
-    Refresh-ProcessPath
-
-    $nodeCommand = Get-Command "node" -ErrorAction SilentlyContinue
-    $npxCommand = Get-Command "npx" -ErrorAction SilentlyContinue
-
-    if ($null -eq $nodeCommand -or $null -eq $npxCommand) {
-        $candidatePaths = @(
-            (Join-Path $env:ProgramFiles "nodejs"),
-            (Join-Path $env:LOCALAPPDATA "Programs\nodejs")
-        )
-
-        foreach ($candidatePath in $candidatePaths) {
-            $nodeExe = Join-Path $candidatePath "node.exe"
-            $npxCmd = Join-Path $candidatePath "npx.cmd"
-
-            if ((Test-Path -LiteralPath $nodeExe) -and (Test-Path -LiteralPath $npxCmd)) {
-                Add-UserPathEntry $candidatePath
-                break
+        $pattern = '^\s*' + [regex]::Escape($Key) + '\s*='
+        for ($i = $start + 1; $i -lt $end; $i++) {
+            if ($lines[$i] -match $pattern) {
+                $lines[$i] = "$Key = $Value"
+                return ($lines -join "`n") + "`n"
             }
         }
+        $lines.Insert($end, "$Key = $Value")
+        return ($lines -join "`n") + "`n"
     }
-
-    Refresh-ProcessPath
-}
-
-Require-Command "node"
-Require-Command "npx"
-
-$nodeVersionOutput = & node --version 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "เรียกใช้งาน Node.js ไม่สำเร็จ: $nodeVersionOutput"
-}
-$nodeVersionText = ($nodeVersionOutput | Out-String).Trim()
-if ($nodeVersionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') {
-    throw "ไม่สามารถอ่าน Node.js version ได้: $nodeVersionText"
-}
-$nodeMajor = [int]$Matches[1]
-$nodeMinor = [int]$Matches[2]
-if ($nodeMajor -lt 18 -or ($nodeMajor -eq 18 -and $nodeMinor -lt 17)) {
-    throw "ต้องใช้ Node.js 18.17 หรือใหม่กว่า ปัจจุบันคือ $nodeVersionText"
-}
-
-$npxVersionOutput = & npx --version 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "พบ npx แต่เรียกใช้งานไม่ได้: $npxVersionOutput กรุณาตรวจสอบการติดตั้ง Node.js/npm"
-}
-$npxVersionText = ($npxVersionOutput | Out-String).Trim()
-
-Write-Step "ตรวจสอบ Claude Code และ Codex CLI"
-Require-Command "claude"
-Require-Command "codex"
-
-Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
-Write-Host "npx: $npxVersionText" -ForegroundColor Green
-Write-Host "Claude Code: พร้อมใช้งาน" -ForegroundColor Green
-Write-Host "Codex: พร้อมใช้งาน" -ForegroundColor Green
-
-$homePath = $HOME
-$claudeDir = Join-Path $homePath ".claude"
-$codexDir = Join-Path $homePath ".codex"
-$claudeSettingsPath = Join-Path $claudeDir "settings.json"
-$codexConfigPath = Join-Path $codexDir "config.toml"
-
-New-Item -ItemType Directory -Force -Path $claudeDir, $codexDir | Out-Null
-
-Write-Step "ติดตั้ง SocratiCode Marketplace และ Claude Code Plugin"
-$claudeMarketplaces = (& claude plugin marketplace list 2>&1 | Out-String)
-if ($LASTEXITCODE -ne 0 -or $claudeMarketplaces -notmatch '(?i)socraticode') {
-    Invoke-Checked "claude" @("plugin", "marketplace", "add", "giancarloerra/socraticode") -AllowExisting
-}
-Invoke-Checked "claude" @("plugin", "install", "--scope", "user", "socraticode@socraticode") -AllowExisting
-
-Write-Step "ติดตั้ง SocratiCode Marketplace และ Codex Plugin"
-$codexMarketplaces = (& codex plugin marketplace list 2>&1 | Out-String)
-if ($LASTEXITCODE -ne 0 -or $codexMarketplaces -notmatch '(?i)socraticode') {
-    Invoke-Checked "codex" @("plugin", "marketplace", "add", "giancarloerra/socraticode", "--ref", "main") -AllowExisting
-}
-Invoke-Checked "codex" @("plugin", "add", "socraticode@socraticode") -AllowExisting
-
-Write-Step "ตั้งค่า Claude Code"
-$claudeSettings = [PSCustomObject]@{}
-if (Test-Path -LiteralPath $claudeSettingsPath) {
-    $rawSettings = Get-Content -LiteralPath $claudeSettingsPath -Raw
-    if (-not [string]::IsNullOrWhiteSpace($rawSettings)) {
-        $claudeSettings = $rawSettings | ConvertFrom-Json
+    $toml = Set-TomlValue $toml 'plugins."socraticode@socraticode".mcp_servers.socraticode' "enabled" "false"
+    $toml = Set-TomlValue $toml "mcp_servers.socraticode" "command" '"npx"'
+    $toml = Set-TomlValue $toml "mcp_servers.socraticode" "args" '["-y", "--prefer-online", "socraticode@latest"]'
+    $envSettings = [ordered]@{
+        EMBEDDING_PROVIDER = '"ollama"'
+        EMBEDDING_CONTEXT_LENGTH = '"8192"'
+        EMBEDDING_DIMENSIONS = '"1024"'
+        EMBEDDING_DOCUMENT_PREFIX = '""'
+        EMBEDDING_MODEL = '"bge-m3"'
+        EMBEDDING_QUERY_PREFIX = '""'
+        OLLAMA_MODE = '"external"'
+        OLLAMA_URL = '"https://ollama-npm.moph.go.th"'
+        QDRANT_MODE = '"external"'
+        QDRANT_URL = '"https://qdrant-npm.moph.go.th"'
     }
-}
-if ($null -eq $claudeSettings.env) {
-    Set-JsonProperty $claudeSettings "env" ([PSCustomObject]@{})
-}
-$environment = $claudeSettings.env
-$settings = [ordered]@{
-    EMBEDDING_PROVIDER = "ollama"
-    EMBEDDING_CONTEXT_LENGTH = "8192"
-    EMBEDDING_DIMENSIONS = "1024"
-    EMBEDDING_DOCUMENT_PREFIX = ""
-    EMBEDDING_MODEL = "bge-m3"
-    EMBEDDING_QUERY_PREFIX = ""
-    OLLAMA_MODE = "external"
-    OLLAMA_URL = "https://ollama-npm.moph.go.th"
-    QDRANT_MODE = "external"
-    QDRANT_URL = "https://qdrant-npm.moph.go.th"
-}
-$changed = $false
-foreach ($key in $settings.Keys) {
-    if ($null -eq $environment.PSObject.Properties[$key] -or $environment.$key -cne $settings[$key]) {
-        Set-JsonProperty $environment $key $settings[$key]
-        $changed = $true
+    foreach ($key in $envSettings.Keys) {
+        $toml = Set-TomlValue $toml "mcp_servers.socraticode.env" $key $envSettings[$key]
     }
-}
-if ($changed -or -not (Test-Path -LiteralPath $claudeSettingsPath)) {
-    Backup-Once $claudeSettingsPath
-    $json = $claudeSettings | ConvertTo-Json -Depth 100
-    Write-Utf8NoBom $claudeSettingsPath $json
+    Backup-Once $codexConfigPath
+    Write-Utf8NoBom $codexConfigPath $toml
+    $updated++
 }
 else {
-    Write-Host "Claude settings already match target configuration."
+    Write-Host "ไม่พบ Codex CLI ข้ามรายการนี้" -ForegroundColor Yellow
 }
 
-Write-Step "ตั้งค่า Codex"
-$toml = ""
-if (Test-Path -LiteralPath $codexConfigPath) {
-    $toml = Get-Content -LiteralPath $codexConfigPath -Raw
-}
-$toml = Set-TomlValue $toml 'plugins."socraticode@socraticode".mcp_servers.socraticode' "enabled" "false"
-$toml = Set-TomlValue $toml "mcp_servers.socraticode" "command" '"npx"'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode" "args" '["-y", "--prefer-online", "socraticode@latest"]'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "EMBEDDING_PROVIDER" '"ollama"'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "EMBEDDING_CONTEXT_LENGTH" '"8192"'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "EMBEDDING_DIMENSIONS" '"1024"'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "EMBEDDING_DOCUMENT_PREFIX" '""'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "EMBEDDING_MODEL" '"bge-m3"'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "EMBEDDING_QUERY_PREFIX" '""'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "OLLAMA_MODE" '"external"'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "OLLAMA_URL" '"https://ollama-npm.moph.go.th"'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "QDRANT_MODE" '"external"'
-$toml = Set-TomlValue $toml "mcp_servers.socraticode.env" "QDRANT_URL" '"https://qdrant-npm.moph.go.th"'
-Backup-Once $codexConfigPath
-Write-Utf8NoBom $codexConfigPath $toml
-
-Write-Step "ติดตั้งเสร็จ"
-Write-Host "Claude Code: SocratiCode Plugin + Global Environment"
-Write-Host "Codex: SocratiCode Plugin Skills + Configured MCP Server"
-Write-Host "Ollama: https://ollama-npm.moph.go.th"
-Write-Host "Qdrant: https://qdrant-npm.moph.go.th"
-Write-Host "Engine: socraticode@latest"
-Write-Host "ปิดและเปิด Claude Code / Codex ใหม่เพื่อโหลดการตั้งค่า"
+if ($updated -eq 0) { throw "ไม่พบ Claude Code CLI หรือ Codex CLI" }
+Write-Step "Upgrade เสร็จ"
+Write-Host "ปิดและเปิด Codex CLI ใหม่เพื่อโหลด Plugin และ MCP เวอร์ชันใหม่"
