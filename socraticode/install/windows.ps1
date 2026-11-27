@@ -24,42 +24,91 @@ function Backup-Once([string]$Path) {
     }
 }
 
-Write-Step "Checking Node.js and npx"
-$node = Get-Command node -ErrorAction SilentlyContinue
-$npx = Get-Command npx -ErrorAction SilentlyContinue
-$needsNode = ($null -eq $node -or $null -eq $npx)
+$nodeMinMajor = 18
+$nodeMinMinor = 17
+$nodeDist = "https://nodejs.org/dist"
 
-if (-not $needsNode) {
+function Get-NodeProblem {
+    $ErrorActionPreference = "Continue"
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return "Node.js was not found" }
+    if (-not (Get-Command npx -ErrorAction SilentlyContinue)) { return "npx was not found" }
     $versionText = (& node --version 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') {
-        $needsNode = $true
+    if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') { return "The Node.js version cannot be read" }
+    $major = [int]$Matches[1]
+    $minor = [int]$Matches[2]
+    if ($major -lt $nodeMinMajor -or ($major -eq $nodeMinMajor -and $minor -lt $nodeMinMinor)) {
+        return "Node.js $versionText is older than $nodeMinMajor.$nodeMinMinor"
     }
-    else {
-        $major = [int]$Matches[1]
-        $minor = [int]$Matches[2]
-        if ($major -lt 18 -or ($major -eq 18 -and $minor -lt 17)) { $needsNode = $true }
-    }
+    return $null
 }
 
-if ($needsNode) {
-    $answer = Read-Host "Install Node.js LTS with winget? (y/n)"
-    if ($answer -notmatch '^(y|yes)$') { throw "Cancelled: Node.js/npx is not available" }
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "winget not found. Install Node.js LTS first" }
-    Invoke-Checked "winget" @("install", "--id", "OpenJS.NodeJS.LTS", "--exact", "--accept-package-agreements", "--accept-source-agreements")
+function Update-SessionPath {
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machinePath;$userPath"
 }
 
-if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npx -ErrorAction SilentlyContinue)) {
-    throw "Node.js/npx not found. Open a new PowerShell window and run this installer again"
+function Install-NodeFromOfficialSite {
+    $ProgressPreference = "SilentlyContinue"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $cpu = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    $arch = switch ($cpu) {
+        "AMD64" { "x64" }
+        "ARM64" { "arm64" }
+        default { throw "Unsupported Windows architecture: $cpu" }
+    }
+    $release = Invoke-RestMethod -UseBasicParsing -Uri "$nodeDist/index.json" | Where-Object { $_.lts } | Select-Object -First 1
+    if (-not $release) { throw "Cannot read the Node.js release list from $nodeDist" }
+    $version = $release.version
+    $file = "node-$version-$arch.msi"
+    $msi = Join-Path $env:TEMP $file
+
+    Write-Host "Downloading $nodeDist/$version/$file"
+    Invoke-WebRequest -UseBasicParsing -Uri "$nodeDist/$version/$file" -OutFile $msi
+    $sums = [string](Invoke-RestMethod -UseBasicParsing -Uri "$nodeDist/$version/SHASUMS256.txt")
+    $sumLine = ($sums -split "`n") | Where-Object { $_ -match "\s$([regex]::Escape($file))\s*$" } | Select-Object -First 1
+    if (-not $sumLine) { throw "No checksum for $file in SHASUMS256.txt" }
+    $expected = ($sumLine.Trim() -split '\s+')[0]
+    $actual = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash
+    if ($actual -ne $expected) {
+        Remove-Item -LiteralPath $msi -ErrorAction SilentlyContinue
+        throw "Checksum mismatch for $file"
+    }
+
+    Write-Host "Installing Node.js $version (Windows may ask for administrator approval)"
+    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msi`"", "/qn", "/norestart") -Verb RunAs -Wait -PassThru
+    Remove-Item -LiteralPath $msi -ErrorAction SilentlyContinue
+    if ($process.ExitCode -notin 0, 3010) { throw "The Node.js installer failed with exit code $($process.ExitCode)" }
 }
-$versionText = (& node --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') { throw "Cannot read the Node.js version" }
-$major = [int]$Matches[1]
-$minor = [int]$Matches[2]
-if ($major -lt 18 -or ($major -eq 18 -and $minor -lt 17)) { throw "Node.js 18.17 or newer is required" }
-Write-Host "Node.js $versionText"
+
+Write-Step "Checking Node.js and npx"
+$nodeProblem = Get-NodeProblem
+if ($nodeProblem) {
+    Write-Host $nodeProblem -ForegroundColor Yellow
+    $answer = Read-Host "Install Node.js LTS (includes npm and npx) now? (y/n)"
+    if ($answer -notmatch '^(y|yes)$') { throw "Cancelled: Node.js $nodeMinMajor.$nodeMinMinor or newer with npx is required" }
+
+    $nodeInstalled = $false
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Step "Installing Node.js LTS with winget"
+        try {
+            Invoke-Checked "winget" @("install", "--id", "OpenJS.NodeJS.LTS", "--exact", "--accept-package-agreements", "--accept-source-agreements")
+            $nodeInstalled = $true
+        }
+        catch {
+            Write-Host "winget could not install Node.js: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    if (-not $nodeInstalled) {
+        Write-Step "Installing Node.js LTS from nodejs.org"
+        Install-NodeFromOfficialSite
+    }
+
+    Update-SessionPath
+    $nodeProblem = Get-NodeProblem
+    if ($nodeProblem) { throw "$nodeProblem after the install. Open a new PowerShell window and run this installer again" }
+}
+Write-Host "Node.js $((& node --version | Out-String).Trim()) with npx"
 
 $marketplaceRepo = "giancarloerra/socraticode"
 $marketplaceName = "socraticode"
@@ -81,27 +130,28 @@ $env:SOCRATICODE_REMOTE_SETTINGS = ($remoteSettings | ConvertTo-Json -Compress)
 $claudeSettingsPath = Join-Path $HOME ".claude\settings.json"
 
 Write-Step "Installing the SocratiCode plugin for Claude Code"
-if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { throw "Claude Code CLI not found. Install Claude Code first" }
+$claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+if (-not $claude) { throw "Claude Code CLI not found. Install Claude Code first" }
 
-$marketplaces = Get-CommandText "claude" @("plugin", "marketplace", "list")
+$marketplaces = Get-CommandText $claude @("plugin", "marketplace", "list")
 if ($marketplaces -match "(?m)(^|\s)$([regex]::Escape($marketplaceName))\s*$") {
-    Invoke-Checked "claude" @("plugin", "marketplace", "update", $marketplaceName)
+    Invoke-Checked $claude @("plugin", "marketplace", "update", $marketplaceName)
 }
 else {
-    Invoke-Checked "claude" @("plugin", "marketplace", "add", $marketplaceRepo)
+    Invoke-Checked $claude @("plugin", "marketplace", "add", $marketplaceRepo)
 }
 
-$plugins = Get-CommandText "claude" @("plugin", "list")
+$plugins = Get-CommandText $claude @("plugin", "list")
 if ($plugins -match [regex]::Escape($pluginId)) {
     try {
-        Invoke-Checked "claude" @("plugin", "update", "--scope", "user", $pluginId)
+        Invoke-Checked $claude @("plugin", "update", "--scope", "user", $pluginId)
     }
     catch {
         Write-Host "Plugin update failed, keeping the installed version: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
 else {
-    Invoke-Checked "claude" @("plugin", "install", "--scope", "user", $pluginId)
+    Invoke-Checked $claude @("plugin", "install", "--scope", "user", $pluginId)
 }
 
 Write-Step "Writing the remote Ollama/Qdrant settings for Claude Code"
